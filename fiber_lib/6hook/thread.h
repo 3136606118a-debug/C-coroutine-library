@@ -1,6 +1,7 @@
 #ifndef _THREAD_H_
 #define _THREAD_H_
 
+#include <string>
 #include <mutex>
 #include <condition_variable>
 #include <functional>     
