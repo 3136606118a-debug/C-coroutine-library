@@ -10,7 +10,39 @@
 #include <unistd.h>
 #include <mutex>
 
+// 👉 第一步：添加共享栈需要的头文件
+#include <vector>
+#include <cstring>
+
 namespace sylar {
+
+// 👉 第二步：添加共享栈管理结构（放在Fiber类外）
+// 单个共享栈：整个线程只有几个这样的共享栈，所有协程轮流复用
+struct SharedStack {
+    char*  bottom;  // 共享栈的栈底（Linux栈从高地址往低地址生长）
+    size_t size;    // 共享栈总大小
+    bool   is_used; // 当前是否被协程占用
+};
+
+// 每个线程独立的共享栈池：加对齐避免缓存伪共享，不需要锁
+class alignas(64) SharedStackPool {
+public:
+    // 默认创建8个16KB的共享栈，数量和CPU核心匹配
+    SharedStackPool(int stack_num = 32, size_t stack_size = (1 << 16));
+    ~SharedStackPool();
+
+    // 获取空闲共享栈
+    SharedStack* get_free();
+    // 释放用完的共享栈
+    void release(SharedStack* s);
+
+private:
+    std::vector<SharedStack> m_pools;
+};
+
+// 线程局部变量：每个线程独一份，完全无锁
+extern thread_local SharedStackPool g_shared_stack_pool;
+
 
 class Fiber : public std::enable_shared_from_this<Fiber>
 {
@@ -67,8 +99,18 @@ private:
 	State m_state = READY;
 	// 协程上下文
 	ucontext_t m_ctx;
-	// 协程栈指针
-	void* m_stack = nullptr;
+
+	// 👉 第三步：修改原来的独立栈成员为共享栈的保存区
+	// 原独立栈写法（注释掉，保留原来代码方便回退）
+	// // 协程栈指针
+	// void* m_stack = nullptr;
+
+	// 共享栈修改：协程只需要保存自己实际用到的栈数据
+	void* m_save_stack = nullptr; // 切出时保存协程的栈数据
+	size_t m_save_cap = 0;        // 保存区的容量
+	size_t m_save_len = 0;        // 实际使用的大小
+	// 修改结束
+
 	// 协程函数
 	std::function<void()> m_cb;
 	// 是否让出执行权交给调度协程
@@ -81,4 +123,3 @@ public:
 }
 
 #endif
-
